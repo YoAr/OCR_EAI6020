@@ -1,9 +1,12 @@
 import cv2
 import pytesseract
+from pytesseract import Output
 import os
 import json
 import numpy as np
 import csv
+import psycopg2
+import matplotlib.pyplot as plt
 
 finalJson = []
 
@@ -33,20 +36,21 @@ def thresholding(image):
 
 
 #opening - erosion followed by dilation
-def opening(image):
+def opening_image(image):
     kernel = np.ones((5,5),np.uint8)
     return cv2.morphologyEx(image, cv2.MORPH_OPEN, kernel)
 
 #canny edge detection
-def canny(image):
+def canny_image(image):
     return cv2.Canny(image, 100, 200)
 
 def ocr(file_path):
     image = cv2.imread(file_path)
-    gray = get_grayscale(image)
-    thresh = thresholding(gray)
-    # opening = opening(gray)
-    # canny = canny(gray)
+    #Optimization techniques | Did not work in this case
+    # gray = get_grayscale(image)
+    # thresh = thresholding(gray)
+    # opening = opening_image(thresh)
+    # canny = canny_image(gray)
     custom_config = r'--oem 3 --psm 6'
     text = pytesseract.image_to_string(image,config=custom_config)
     # print(text)
@@ -213,11 +217,50 @@ def convertToCSV(filename):
         csv_writer.writerow(item.values())
     data_file.close()
 
+def getZoneDate(file_path):
+    image = cv2.imread(file_path)
+    x = 700
+    y = 120
+    w = 120
+    h = 50
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    results = pytesseract.image_to_data(rgb, output_type= Output.DICT)
+    # loop over each of the individual text localizations
+    for i in range(0, len(results["text"])):
+        # extract the bounding box coordinates of the text region from
+        # the current result
+        x = results["left"][i]
+        y = results["top"][i]
+        w = results["width"][i]
+        h = results["height"][i]
+        
+        # extract the OCR text itself along with the confidence of the
+        # text localization
+        text = results["text"][i]
+        conf = int(results["conf"][i])
+        # filter out weak confidence text localizations
+        if conf > 60:
+            # display the confidence and text to our terminal
+            print("Confidence: {}".format(conf))
+            print("Text: {}".format(text))
+            print("")
+            # strip out non-ASCII text so we can draw the text on the image
+            # using OpenCV, then draw a bounding box around the text along
+            # with the text itself
+            text = "".join([c if ord(c) < 128 else "" for c in text]).strip()
+            cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.putText(image, text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                1.2, (0, 0, 255), 3)
+    # show the output image
+    plt.figure()
+    plt.imshow(image) 
+    plt.show()
+
 
 def readAll():
     print("-- Processing Images --")
     path = os.getcwd()
-    if('images' not in path):
+    if(path.find('images') < 0):
         os.chdir(path+'/images')
     index = 0
     for file in os.listdir():
@@ -229,18 +272,63 @@ def readAll():
     with open(json_file_name, 'w') as outfile:
         json.dump(finalJson, outfile)
     print("-- Output saved to system as .json file --")
+    print("-- Inserting data into Postgres table --")
+    insertData(finalJson)
+
     convertToCSV(json_file_name)
-    print("-- Output saved to system as .csv file --")
+    print("-- Output saved--")
+
+def readZone():
+    print("-- Processing Images --")
+    path = os.getcwd()
+    if(path.find('images') < 0):
+        os.chdir(path+'/images')
+    index = 0
+    for file in os.listdir():
+        if file.endswith(".png"):
+            file_path = f"{path}/{file}"
+            getZoneDate(file_path)
+
+tableName = 'PERSON'
+columns = ['NAME','RELATION','ADDRESS','STATE','PINCODE']
+
+def createDB():
+    con = psycopg2.connect(dbname='ocr',user='yoar', host='localhost' ,password='565656')
+    cur = con.cursor()
+    try:
+        cur.execute("CREATE TABLE "+tableName+"(id serial PRIMARY KEY, NAME varchar, RELATION varchar, ADDRESS varchar, STATE varchar, PINCODE integer)")
+    except psycopg2.Error:
+        cur.close()
+        con.close()
+        return
+    finally:
+        con.commit()
+        cur.close()
+        con.close()
+    
+
+def insertData(jsondata):
+    con = psycopg2.connect(dbname='ocr',user='yoar', host='localhost' ,password='565656')
+    cur = con.cursor()
+    for item in jsondata:
+        my_data = [item[field] for field in columns]
+        for i, v in enumerate(my_data):
+            if isinstance(v, dict):
+                my_data[i] = json.dumps(v)
+        insert_query = "INSERT INTO "+tableName+" (NAME,RELATION,ADDRESS,STATE,PINCODE) VALUES (%s, %s, %s, %s,%s)"
+        cur.execute(insert_query, tuple(my_data))
+    con.commit()
+    cur.close()
+    con.close()
+
     
 
 #Run only the first time if images are in jpg
 # convertToPng()
+
+createDB()
 #Read image and store as CSV
 readAll()
 
-
-#Business questions
-#Death based on age
-#Male / Female
-#Cluster on Street address
-#Veteren
+# Experimenting with zonal read
+# readZone()
