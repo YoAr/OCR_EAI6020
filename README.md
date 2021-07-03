@@ -5,3 +5,7 @@ Project to to perform OCR on images using Open CV, Pytesseract for EAI6020
 - Open CV for python
 - Pytesseract
 - Conda
+
+## Other tools used
+- Postgres
+- Tableau
